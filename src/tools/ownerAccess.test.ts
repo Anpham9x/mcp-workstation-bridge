@@ -1,0 +1,73 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { registerHealthTool } from './health.js';
+import { hasOwnerAccess, withOwnerAccess } from '../security/ownerAccess.js';
+import { resolveAndValidatePath } from '../security/policy.js';
+import { executePowerShell } from './powerShell.js';
+
+const root=await fs.mkdtemp(path.join(os.tmpdir(),'mcp-owner-access-test-'));
+const policy=path.join(root,'owner-policy.json'),principal='oauth:prf_'+'a'.repeat(64);
+const previousPS=process.env.MCP_POWERSHELL_ENABLED;process.env.MCP_POWERSHELL_ENABLED='1';
+await fs.writeFile(policy,JSON.stringify({schemaVersion:1,enabled:true,principals:[principal]}));
+function serverFor(who:string){const server=new McpServer({name:'owner-test',version:'1'});registerHealthTool(server,{compactCatalog:true,includePowerShell:true,powerShellTrustOAuthGate:true,reliabilityPrincipal:who,ownerPolicyPath:policy});return server;}
+const owner=serverFor(principal),foreign=serverFor('legacy-unverified');
+const foreignOAuth=serverFor('oauth:prf_'+'b'.repeat(64));
+type Tools=Record<string,{handler:(args:Record<string,unknown>)=>Promise<{isError?:boolean;content:{text?:string}[]}>}>;
+async function call(server:McpServer,name:string,args:Record<string,unknown>={}){const result=await (server as unknown as {_registeredTools:Tools})._registeredTools[name].handler(args);return {error:result.isError===true,data:JSON.parse(result.content[0].text!) as Record<string,any>};}
+try{
+  const all=(owner as unknown as {_registeredTools:Tools})._registeredTools;
+  assert.ok(all.filesystem_manage);assert.ok(!all.project_bootstrap);assert.ok(!all.presentation_design);
+  assert.equal((await call(owner,'agy_health')).data.reliability.accessMode,'owner');
+  assert.equal((await call(foreign,'agy_health')).data.reliability.accessMode,'scoped');
+  assert.equal((await call(foreignOAuth,'agy_health')).data.reliability.accessMode,'scoped');
+  const project=path.join(root,'new project'),file=path.join(project,'main.py');
+  assert.equal((await call(owner,'filesystem_manage',{action:'mkdir',path:project,recursive:true})).error,false);
+  assert.equal((await call(owner,'write_text_file',{filePath:file,content:'\ufeffone\r\n'})).error,false);
+  assert.equal((await call(owner,'replace_text_once',{filePath:file,findText:'one',replaceText:'two'})).error,false);
+  assert.equal((await call(owner,'append_to_file',{filePath:file,text:'three\r\n'})).error,false);
+  assert.equal(await fs.readFile(file,'utf8'),'\ufefftwo\r\nthree\r\n');
+  assert.equal((await call(owner,'write_text_file',{filePath:path.join(project,'package.json'),content:'{"scripts":{"check":"node -e \\\"console.log(123)\\\""}}'})).error,false);
+  const packageRun=await call(owner,'run_package_script',{workspacePath:project,script:'check'});assert.equal(packageRun.error,false);assert.equal(packageRun.data.exitCode,0);assert.match(packageRun.data.stdout,/123/);
+  assert.equal((await call(owner,'project_profile',{workspacePath:project,action:'authorization_status'})).data.authorizationRequired,false);
+  assert.equal((await call(owner,'run_verification',{workspacePath:project,commandId:'repository_preflight'})).data.accessMode,'owner');
+  assert.equal((await call(owner,'validate_workspace_policy',{workspacePath:project,action:'execute',command:'npm_build'})).data.decision.allowed,true);
+  assert.equal((await call(owner,'apply_patch',{workspacePath:project,patch:'--- a/main.py\n+++ b/main.py\n@@ -1,2 +1,2 @@\n-two\n+patched\n three\n'})).error,false);
+  assert.equal(await fs.readFile(file,'utf8'),'\ufeffpatched\r\nthree\r\n');
+  const copy=path.join(project,'copy.py'),moved=path.join(project,'moved.py');
+  assert.equal((await call(owner,'filesystem_manage',{action:'copy',path:file,destination:copy})).error,false);
+  assert.equal((await call(owner,'filesystem_manage',{action:'move',path:copy,destination:moved})).error,false);
+  assert.equal((await call(owner,'filesystem_manage',{action:'delete',path:moved})).error,true);
+  const removed=await call(owner,'filesystem_manage',{action:'delete',path:moved,confirmDelete:true});
+  assert.equal(removed.data.recoverable,true);assert.equal((await fs.readFile(removed.data.trashPath)).equals(await fs.readFile(file)),true);
+  assert.equal((await call(owner,'filesystem_manage',{action:'move',path:removed.data.trashPath,destination:moved})).error,false);
+  assert.equal((await call(owner,'filesystem_manage',{action:'delete',path:moved,permanent:true,confirmDelete:true})).error,false);
+  assert.equal((await call(owner,'filesystem_manage',{action:'stat',path:moved})).data.exists,false);
+  const bytes=Buffer.from([0,1,2,255]);const binary=path.join(project,'a.bin');
+  assert.equal((await call(owner,'filesystem_manage',{action:'write_bytes',path:binary,base64:bytes.toString('base64')})).error,false);
+  assert.ok((await fs.readFile(binary)).equals(bytes));
+  assert.equal((await call(owner,'filesystem_manage',{action:'delete',path:path.parse(root).root,recursive:true,confirmDelete:true})).error,true);
+  assert.equal((await call(owner,'filesystem_manage',{action:'copy',path:project,destination:path.join(project,'inside'),recursive:true})).error,true);
+  assert.equal((await call(foreign,'filesystem_manage',{action:'mkdir',path:path.join(root,'foreign')})).error,true);
+  assert.equal((await call(foreign,'write_text_file',{filePath:path.join(project,'foreign.py'),content:'no'})).error,true);
+  assert.equal((await call(foreignOAuth,'write_text_file',{filePath:path.join(project,'foreign.py'),content:'no'})).error,true);
+  assert.equal((await call(foreign,'run_powershell',{workspacePath:project,command:'Write-Output no',confirmExecution:true})).data.error,'SCOPED_ADAPTER_REQUIRED');
+  const ps=await call(owner,'run_powershell',{workspacePath:project,command:"$r = 2 + 3; Write-Output $r",confirmExecution:true});
+  assert.equal(ps.data.success,true);assert.match(ps.data.stdout,/5/);
+  const inline=await call(owner,'run_powershell',{workspacePath:project,command:'node -e "console.log(12345)"',confirmExecution:true});assert.equal(inline.data.success,true);assert.match(inline.data.stdout,/12345/);
+  await withOwnerAccess(principal,async()=>{const r=await executePowerShell({workspacePath:project,command:'Write-Output owner-no-dialog',confirmExecution:true},async()=>{throw new Error('Unexpected approval');});assert.equal(r.success,true);},policy);
+  await Promise.all([withOwnerAccess(principal,async()=>{await new Promise(r=>setTimeout(r,15));assert.equal(hasOwnerAccess(),true);assert.equal(resolveAndValidatePath(project),project);},policy),withOwnerAccess('legacy-unverified',async()=>{await new Promise(r=>setTimeout(r,5));assert.equal(hasOwnerAccess(),false);assert.throws(()=>resolveAndValidatePath(project));},policy)]);
+  assert.equal(hasOwnerAccess(),false);
+  await fs.writeFile(policy,JSON.stringify({schemaVersion:1,enabled:false,principals:[principal]}));
+  assert.equal((await call(owner,'write_text_file',{filePath:file,content:'no',overwrite:true})).error,true);
+  assert.equal((await call(owner,'agy_health')).data.reliability.accessMode,'scoped');
+  await fs.writeFile(policy,'invalid');assert.equal((await call(owner,'agy_health')).data.reliability.accessMode,'scoped');
+  console.log('ownerAccess PASS: outside-root/non-Git text/config/bytes/patch CRUD, recovery/permanent deletion, PowerShell no-dialog, owner isolation/concurrency/revocation/catalog.');
+}finally{
+  if(path.dirname(root)!==os.tmpdir()||!path.basename(root).startsWith('mcp-owner-access-test-'))throw new Error('Unsafe fixture cleanup');
+  await fs.rm(root,{recursive:true,force:true});
+  if(previousPS===undefined)delete process.env.MCP_POWERSHELL_ENABLED;else process.env.MCP_POWERSHELL_ENABLED=previousPS;
+  await owner.close();await foreign.close();await foreignOAuth.close();
+}

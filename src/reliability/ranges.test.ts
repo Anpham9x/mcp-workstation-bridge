@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { readManyFiles } from '../tools/codingContext.js';
+await fs.mkdir('scratch',{recursive:true});
+const root=await fs.mkdtemp(path.resolve('scratch/reliability-ranges-'));
+await fs.writeFile(path.join(root,'large.md'),Array.from({length:1000},(_,i)=>'Tiếng Việt dòng '+(i+1)).join('\r\n'));
+const result=await readManyFiles({workspacePath:root,files:[{filePath:'large.md',startLine:10,endLine:12}],maxBytesPerFile:200,maxTotalBytes:300,includeLineNumbers:true});
+assert.equal(result.files[0].ok,true);
+assert.equal(result.files[0].truncated,false);
+assert.equal(result.files[0].content,'10: Tiếng Việt dòng 10\n11: Tiếng Việt dòng 11\n12: Tiếng Việt dòng 12');
+assert.equal(result.returnedBytes,Buffer.byteLength(result.files[0].content!));
+assert.ok(result.readBytes>0);assert.ok(result.requestId);
+const limited=await readManyFiles({workspacePath:root,files:[{filePath:'large.md',startLine:1,endLine:100}],maxBytesPerFile:40,maxTotalBytes:40});
+assert.equal(limited.files[0].truncated,true);assert.ok(limited.returnedBytes<=40);
+const errors=await readManyFiles({workspacePath:root,files:['large.md','../outside.txt',{filePath:'large.md',startLine:30,endLine:1}],maxBytesPerFile:40});
+assert.equal(errors.files.every(x=>!x.ok),true);
+await fs.symlink(root,path.join(root,'alias'),'junction');
+assert.equal((await readManyFiles({workspacePath:root,files:[{filePath:'alias/large.md',startLine:1,endLine:1}]})).files[0].ok,false);
+console.log('ranges: large-file bounded Unicode/range/truncation/budget/errors/junction PASS');
+

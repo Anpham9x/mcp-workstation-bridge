@@ -1,0 +1,57 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { workspaceIdentity, loadGrant, authorizeFile, runRepositoryPreflight, type Grant, type ToolContext } from './policy.js';
+import { sha256 } from '../tools/atomicFile.js';
+await fs.mkdir('scratch',{recursive:true});
+const root=await fs.mkdtemp(path.resolve('scratch/reliability-policy-'));
+const git=(args:string[])=>execFileSync('git',['-c','safe.directory='+root,'-c','core.fsmonitor=false',...args],{cwd:root,encoding:'utf8'}).trim();
+git(['init','--quiet']);
+git(['-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','--quiet','-m','fixture']);
+const identity=await workspaceIdentity(root);
+const script=path.join(root,'repository-preflight.ps1');
+await fs.writeFile(script,"param($RepositoryRoot,$Mode,$ExpectedTaskId,$WriteScope)\nWrite-Output 'fixture gate PASS'\nexit 0\n");
+const grant:Grant={id:'fixture',principal:'fixture-owner',workspacePath:root,parentTaskId:'FIXTURE',
+  role:'worker',expiresAt:new Date(Date.now()+600000).toISOString(),revision:1,
+  branch:String(identity.branch),head:String(identity.head),writeScope:['a.txt'],protectedFiles:['protected.txt'],
+  gate:{script,scriptHash:sha256(await fs.readFile(script)),mode:'continue',taskId:'FIXTURE',writeScope:['a.txt']}};
+const p=path.join(root,'operator-policy.json');
+const context:ToolContext={principal:'fixture-owner',requireScopes:true,policyPath:p};
+const persist=()=>fs.writeFile(p,JSON.stringify({schemaVersion:1,grants:[grant]}));
+await persist();
+await loadGrant(context,'fixture',root);
+await assert.rejects(()=>loadGrant({...context,principal:'other'},'fixture'),/FOREIGN/);
+await assert.rejects(()=>loadGrant({...context,principal:'legacy-unverified'},'fixture'),/AUTHENTICATED/);
+await assert.rejects(()=>loadGrant(context,'fixture',path.dirname(root)),/FOREIGN_WORKSPACE/);
+await assert.rejects(()=>authorizeFile(context,'fixture',path.join(root,'a.txt')),/FRESH_PREFLIGHT/);
+assert.equal((await runRepositoryPreflight(context,'fixture',root)).success,true);
+await authorizeFile(context,'fixture',path.join(root,'a.txt'));
+await assert.rejects(()=>authorizeFile(context,'fixture',path.join(root,'b.txt')),/SCOPE/);
+grant.revision++;await persist();
+await assert.rejects(()=>authorizeFile(context,'fixture',path.join(root,'a.txt')),/FRESH_PREFLIGHT/);
+grant.writeScope=['../escape.txt'];await persist();
+await assert.rejects(()=>loadGrant(context,'fixture'),/SCOPE_ESCAPE/);
+grant.writeScope=['a.txt'];grant.expiresAt='2000-01-01T00:00:00Z';await persist();
+await assert.rejects(()=>loadGrant(context,'fixture'),/STALE/);
+grant.expiresAt=new Date(Date.now()+600000).toISOString();grant.head='a'.repeat(40);await persist();
+await assert.rejects(()=>loadGrant(context,'fixture'),/STALE_REPO/);
+grant.head=String(identity.head);await fs.writeFile(script,"param($RepositoryRoot,$Mode,$ExpectedTaskId,$WriteScope)\nexit 1\n");
+grant.gate.scriptHash=sha256(await fs.readFile(script));await persist();
+assert.equal((await runRepositoryPreflight(context,'fixture',root)).success,false);
+await assert.rejects(()=>authorizeFile(context,'fixture',path.join(root,'a.txt')),/FRESH_PREFLIGHT/);
+await fs.symlink(root,path.join(root,'alias'),'junction');
+await assert.rejects(()=>authorizeFile(context,'fixture',path.join(root,'alias','a.txt')),/LINK/);
+grant.gate.scriptHash=sha256(await fs.readFile(script));
+grant.gate.laneId='lane';grant.gate.executor='executor';grant.gate.leaseId='lease';grant.laneGeneration=7;
+const manifestFile=path.join(root,'.ai/coordination/parallel-lanes.json');await fs.mkdir(path.dirname(manifestFile),{recursive:true});
+const lane={laneId:'lane',taskId:'FIXTURE',executorId:'executor',worktree:root,branch:grant.branch,leaseId:'lease',expiresAt:new Date(Date.now()+600000).toISOString(),writeScope:['a.txt']};
+await fs.writeFile(manifestFile,JSON.stringify({generation:7,lanes:[lane]}));await persist();await loadGrant(context,'fixture');
+lane.expiresAt='2000-01-01T00:00:00Z';await fs.writeFile(manifestFile,JSON.stringify({generation:7,lanes:[lane]}));
+await assert.rejects(()=>loadGrant(context,'fixture'),/STALE_LANE_LEASE/);
+lane.expiresAt=new Date(Date.now()+600000).toISOString();await fs.writeFile(manifestFile,JSON.stringify({generation:8,lanes:[lane]}));
+await assert.rejects(()=>loadGrant(context,'fixture'),/STALE_LANE_GENERATION/);
+delete grant.gate.laneId;delete grant.laneGeneration;grant.writeScope=['a.txt','repository-preflight.ps1'];await persist();
+await assert.rejects(()=>authorizeFile(context,'fixture',script,false),/GATE_SOURCE_PROTECTED/);
+console.log('policy: exact identity/principal/scope/traversal/link/stale/gate-positive-negative PASS; fixture retained '+root);
+

@@ -1,0 +1,40 @@
+{
+  "name": "mcp-antigravity-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Windows MCP workstation bridge with local CLI lifecycle management",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/write-build-provenance.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/server.js",
+    "start:local": "npm run build && node scripts/start-local.mjs",
+    "check:local": "node scripts/check-local-mcp.mjs",
+    "dev": "tsx src/server.ts",
+    "smoke:mcp": "node scripts/smoke-mcp.mjs",
+    "test:powershell": "tsx src/tools/powerShell.test.ts",
+    "test:desktop": "tsx src/tools/windowsDesktop.test.ts",
+    "test:desktop:e2e": "tsx src/tools/windowsDesktop.test.ts --e2e",
+    "test:desktop-indicator": "tsx src/tools/desktopControlIndicator.test.ts",
+    "test:presentation": "tsx src/tools/presentationDesign.test.ts",
+    "test:presentation:e2e": "tsx src/tools/presentationDesign.test.ts --e2e",
+    "test:oauth": "tsx src/security/oauth.test.ts",
+    "test:profile": "tsx src/tools/profile.test.ts",
+    "bridge": "node scripts/bridge.mjs",
+    "autostart:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-autostart.ps1",
+    "autostart:remove": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-autostart.ps1 -Remove"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "jose": "^6.2.3",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
