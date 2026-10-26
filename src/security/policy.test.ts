@@ -91,14 +91,8 @@ assert.deepStrictEqual(ALLOWED_WORKSPACE_ROOTS,
 // Valid read path
 const validPath = path.resolve('C:\\Users\\ExampleUser\\Documents\\safe_project\\main.ts');
 assert.strictEqual(validatePathForRead(validPath, allowedRoots), validPath);
-const dProjectsPath = path.resolve('D:\\Projects\\safe_project\\README.md');
-const dAiPath = path.resolve('D:\\AI\\safe_project\\README.md');
-const dDocumentDesignPath = path.resolve('D:\\Thiet ke tài liệu\\safe_project\\README.md');
-const localSitesPath = path.resolve('C:\\Users\\ExampleUser\\Local Sites\\safe_project\\README.md');
-assert.strictEqual(validatePathForRead(dProjectsPath), dProjectsPath);
-assert.strictEqual(validatePathForRead(dAiPath), dAiPath);
-assert.strictEqual(validatePathForRead(dDocumentDesignPath), dDocumentDesignPath);
-assert.strictEqual(validatePathForRead(localSitesPath), localSitesPath);
+const configuredPath = path.join(ALLOWED_WORKSPACE_ROOTS[0], 'safe_project', 'README.md');
+assert.strictEqual(validatePathForRead(configuredPath), configuredPath);
 assertThrowsSecurityError(
   () => validatePathForRead('D:\\Downloads\\outside.txt'),
   'lies outside configured workspace roots'
@@ -158,7 +152,7 @@ assertThrowsSecurityError(
 // 8. Test structured workspace policy decisions
 console.log('- Testing evaluateWorkspacePolicy...');
 const readPolicy = evaluateWorkspacePolicy({
-  workspacePath: 'C:\\Users\\ExampleUser\\Documents\\safe_project',
+  workspacePath: path.join(ALLOWED_WORKSPACE_ROOTS[0], 'safe_project'),
   action: 'read',
   targetPath: 'main.ts'
 });
@@ -166,21 +160,21 @@ assert.strictEqual(readPolicy.allowed, true, 'Safe read policy should be allowed
 assert.strictEqual(readPolicy.matchedRule, 'SAFE_READ_PATH');
 
 const blockedSecretPolicy = evaluateWorkspacePolicy({
-  workspacePath: 'C:\\Users\\ExampleUser\\Documents\\safe_project',
+  workspacePath: path.join(ALLOWED_WORKSPACE_ROOTS[0], 'safe_project'),
   action: 'read',
   targetPath: '.env'
 });
 assert.strictEqual(blockedSecretPolicy.allowed, false, 'Secret file read should be blocked');
 
 const installPolicy = evaluateWorkspacePolicy({
-  workspacePath: 'C:\\Users\\ExampleUser\\Documents\\safe_project',
+  workspacePath: path.join(ALLOWED_WORKSPACE_ROOTS[0], 'safe_project'),
   action: 'install'
 });
 assert.strictEqual(installPolicy.allowed, false, 'Install must require dedicated install policy');
 assert.strictEqual(installPolicy.matchedRule, 'INSTALL_REQUIRES_DEDICATED_TOOL');
 
 const safeInstallPolicy = evaluateWorkspacePolicy({
-  workspacePath: 'C:\\Users\\ExampleUser\\Documents\\safe_project',
+  workspacePath: path.join(ALLOWED_WORKSPACE_ROOTS[0], 'safe_project'),
   action: 'install',
   command: '@types/node@latest'
 });

@@ -37,9 +37,10 @@ async function supervise(){
   if(await portInUse(port))throw new Error('Port already occupied; refusing to adopt or stop another process');
   await fs.access(path.join(root,'dist/server.js'));
   const token=randomBytes(32).toString('hex');
-  let child, timer, stopping=false, failures=0, startedAt=0, lastExit=null;
+  let child, timer, stopping=false, failures=0, startedAt=0, lastExit=null, generation=0;
   const launch=()=>{
     if(stopping)return;
+    generation++;
     startedAt=Date.now();
     child=spawn(process.execPath,['scripts/start-local.mjs'],{
       cwd:root,env:{...process.env,PORT:String(port)},windowsHide:true,stdio:['ignore','inherit','inherit']
@@ -67,7 +68,7 @@ async function supervise(){
       res.writeHead(403);res.end();return;
     }
     const send=body=>{res.setHeader('Content-Type','application/json');res.end(JSON.stringify(body));};
-    if(req.url==='/status'){send({supervisorPid:process.pid,runtimePid:child?.pid??null,port,running:!!child,lastExit});return;}
+    if(req.url==='/status'){send({supervisorPid:process.pid,runtimePid:child?.pid??null,generation,port,running:!!child,lastExit});return;}
     if(req.url!=='/stop'&&req.url!=='/restart'){res.writeHead(404);res.end();return;}
     if(stopping){res.writeHead(409);res.end();return;}
     stopping=true;

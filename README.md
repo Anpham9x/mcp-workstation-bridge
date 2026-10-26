@@ -20,10 +20,19 @@ npm run check:local
 
 ## Kết nối CLI AI
 
-Chọn CLI/client có hỗ trợ **MCP Streamable HTTP**, thêm server URL `http://127.0.0.1:3011/mcp`, rồi kiểm tra danh sách tools từ client. Cấu hình chính xác tùy client; bridge không yêu cầu một hãng CLI cụ thể. Có thể đưa cấu hình khái niệm sau cho CLI đang dùng và yêu cầu nó chuyển sang cú pháp MCP chính thức của client:
+Ví dụ với Claude Code đã cài và đăng nhập trên cùng máy:
+
+```powershell
+claude mcp add --transport http workstation http://127.0.0.1:3011/mcp
+claude mcp get workstation
+```
+
+Trong phiên Claude Code, dùng `/mcp` để xem kết nối. Cú pháp theo [tài liệu MCP chính thức của Claude Code](https://code.claude.com/docs/en/mcp). Bridge đã được kiểm thử bằng giao thức MCP; ví dụ Claude Code được đối chiếu tài liệu, chưa kiểm thử E2E bằng tài khoản Claude.
+
+Các CLI/client khác cần hỗ trợ **MCP Streamable HTTP** và URL `http://127.0.0.1:3011/mcp`. Cấu hình chính xác tùy client; ví dụ JSON mô tả:
 
 ```json
-{"mcpServers":{"workstation":{"url":"http://127.0.0.1:3011/mcp"}}}
+{"mcpServers":{"workstation":{"type":"http","url":"http://127.0.0.1:3011/mcp"}}}
 ```
 
 Đây là ví dụ mô tả, không phải file cấu hình dùng chung cho mọi CLI. Các client chỉ hỗ trợ stdio cần adapter riêng. CLI quản lý dịch vụ ở trên là công cụ Node có sẵn trong repo và chạy được không cần AI.
@@ -63,6 +72,7 @@ Chế độ mặc định chỉ dành cho máy local. Không đưa cổng này r
 
 - `npm run typecheck` và `npm run build`: kiểm tra/biên dịch nguồn.
 - `npm run check:local`: kiểm tra MCP initialize và tools/list (50 tools ở local mode).
+- `node scripts/cli.test.mjs`: kiểm thử start/restart/stop, tự phục hồi và bảo vệ cổng trên cổng thử riêng; hãy dừng CLI đang chạy trong bản repo này trước khi chạy test.
 - Cổng bị chiếm: dừng dịch vụ của bạn đang sử dụng cổng đó hoặc chọn `PORT` khác; CLI không tự giết tiến trình lạ.
 - `start` thất bại: xem `logs/supervisor.log`; kiểm tra Node, build và cấu hình `.env`.
 - Không chia sẻ `.env`, `.ai`, `.runtime`, ảnh chụp màn hình hay logs chưa rà soát.
